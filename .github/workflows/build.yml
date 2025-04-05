@@ -1,55 +1,69 @@
-name: Build Aseprite
-
-on: [push, workflow_dispatch]  # 允许手动触发
-
+name: build
+on: [push, pull_request]
 jobs:
-  build-windows:
-    runs-on: windows-latest    # Windows 环境编译
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest]
+        build_type: [Release]
+        enable_ui: [on]
+        include:
+          - os: windows-latest
+            build_type: Release
+            enable_ui: on
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive   # 递归克隆子模块
+      # 检出代码仓库，包含子模块
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
 
-    - name: Install Dependencies
-      shell: powershell
-      run: |
-        # 安装 Chocolatey 包管理器
-        Set-ExecutionPolicy Bypass -Scope Process -Force
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-        iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-        
-        # 安装必要工具
-        choco install -y cmake --installargs 'ADD_CMAKE_TO_PATH=System'
-        choco install -y ninja
-        choco install -y python3
+      # 仅在 Linux 系统上使用 ccache 进行编译缓存
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1
+        if: runner.os == 'Linux'
+        with:
+          key: ${{ matrix.os }}-${{ matrix.enable_ui }}
 
-    - name: Build Skia
-      shell: bash
-      run: |
-        # 克隆 Skia 仓库
-        git clone https://github.com/google/skia.git
-        cd skia
-        
-        # 配置并编译 Skia
-        python3 tools/git-sync-deps
-        bin/gn gen out/Static --args='is_debug=false is_official_build=true skia_use_system_expat=false skia_use_system_icu=false skia_use_system_libjpeg_turbo=false skia_use_system_libpng=false skia_use_system_libwebp=false skia_use_system_zlib=false skia_use_system_harfbuzz=false skia_use_system_libheif=false'
-        ninja -C out/Static
+      # 设置 Ninja 构建工具
+      - uses: seanmiddleditch/gha-setup-ninja@master
 
-    - name: Build Aseprite
-      shell: bash
-      env:
-        SKIA_DIR: ${{ github.workspace }}/skia  # 设置 Skia 路径
-      run: |
-        mkdir build
-        cd build
-        cmake -DCMAKE_BUILD_TYPE=Release -DLAF_BACKEND=skia -DSKIA_DIR=$SKIA_DIR ..
-        cmake --build . --config Release --target aseprite --parallel 4
+      # 仅在 Windows 系统上设置 MSVC 开发环境
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
 
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v3
-      with:
-        name: aseprite-bin
-        path: |
-          build/bin/aseprite.exe
-          build/bin/aseprite.pdb
+      # 生成 CMake 构建文件
+      - name: Generating Makefiles
+        shell: bash
+        run: |
+          export enable_ccache=off
+          # 下载 Skia 库和依赖 DLL 文件
+          curl -L https://github.com/blueloveTH/aseprite/releases/download/v0.01/skia.zip --output skia.zip
+          curl -L https://github.com/blueloveTH/aseprite/releases/download/v0.01/libcrypto-1_1-x64.dll --output libcrypto-1_1-x64.dll
+          # 解压 Skia 库
+          7z x skia.zip
+          # 配置 CMake 项目
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DENABLE_UI=${{ matrix.enable_ui }} \
+            -DENABLE_CCACHE=$enable_ccache \
+            -DLAF_BACKEND=skia \
+            -DSKIA_DIR=./skia \
+            -DSKIA_LIBRARY_DIR=./skia/out/Release-x64 \
+            -DSKIA_LIBRARY=./skia/out/Release-x64/skia.lib
+
+      # 编译项目
+      - name: Compiling
+        shell: bash
+        run: |
+          cd build && ninja
+
+      # 上传构建产物
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aseprite
+          path: |
+            libcrypto-1_1-x64.dll
+            build/bin/data
+            build/bin/aseprite.exe
