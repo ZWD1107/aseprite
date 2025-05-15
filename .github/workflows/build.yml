@@ -1,4 +1,5 @@
 name: ninja aseprite
+
 on:
   repository_dispatch:
     types: [build]
