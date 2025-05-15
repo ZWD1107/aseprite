@@ -7,12 +7,17 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest]
-        build_type: [Release]
-        enable_ui: [on]
-        include:
-          - os: windows-latest
-            build_type: Release
-            enable_ui: on
+        build_type: [RelWithDebInfo, Debug]
+        ui: [gui, cli]
+        scripting: [lua, noscripts]
+        exclude:
+          - build_type: Debug
+            ui: gui
+          - build_type: RelWithDebInfo
+            ui: cli
+          - build_type: RelWithDebInfo
+            scripting: noscripts
+
     steps:
       # 检出代码仓库，包含子模块
       - uses: actions/checkout@v4
@@ -21,7 +26,7 @@ jobs:
 
       # 仅在 Linux 系统上使用 ccache 进行编译缓存
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1
+        uses: hendrikmuhs/ccache-action@v1.2.17
         if: runner.os == 'Linux'
         with:
           key: ${{ matrix.os }}-${{ matrix.enable_ui }}
@@ -37,7 +42,19 @@ jobs:
       - name: Generating Makefiles
         shell: bash
         run: |
-          export enable_ccache=off
+          export enable ccache=off
+          if [[ "${{ matrix.ui }}" == "gui" ]] ; then
+            export laf_backend=skia
+          else
+            export laf_backend=none
+          fi
+
+          if [[ "${{ matrix.scripting }}" == "lua" ]] ; then
+            export enable_scripting=on
+          else
+            export enable_scripting=off
+          fi
+          export skia_arch=x64
           # 下载 Skia 库和依赖 DLL 文件
           curl -L https://github.com/blueloveTH/aseprite/releases/download/v0.01/skia.zip --output skia.zip
           curl -L https://github.com/blueloveTH/aseprite/releases/download/v0.01/libcrypto-1_1-x64.dll --output libcrypto-1_1-x64.dll
